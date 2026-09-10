@@ -1,0 +1,90 @@
+name: Archive Master Quick
+on:
+  workflow_dispatch:
+
+jobs:
+  archive:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+      checks: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Prepare and archive master, generate bundle
+        run: |
+          set -euo pipefail
+          TIMESTAMP=$(date -u +"%Y%m%dT%H%M%SZ")
+          OUT=output
+          SNAP_DIR="$OUT/repo_snapshot"
+          rm -rf "$OUT" "$SNAP_DIR"
+          mkdir -p "$SNAP_DIR"
+          echo "Archiving repository master at $TIMESTAMP" > "$OUT/summary.txt"
+          echo "Repository: $GITHUB_REPOSITORY" >> "$OUT/summary.txt"
+          echo "Timestamp: $TIMESTAMP" >> "$OUT/summary.txt"
+          # try to archive origin/master, fallback to master
+          if git rev-parse --verify origin/master >/dev/null 2>&1; then
+            git archive --format=tar origin/master | tar -x -C "$SNAP_DIR" || true
+          else
+            git archive --format=tar master | tar -x -C "$SNAP_DIR" || true
+          fi
+          tar -czf "$OUT/master_${TIMESTAMP}.tar.gz" -C "$SNAP_DIR" . || true
+          # collect some metadata
+          git -C "$SNAP_DIR" log --pretty=format:"%H | %an | %ad | %s" -n 50 > "$OUT/commits_recent.txt" || true
+          echo "Collected commits (last 50) in commits_recent.txt" >> "$OUT/summary.txt"
+          # generate simple plaintext report
+          cat >> "$OUT/summary.txt" <<EOF
+
+Files included:
+- master_${TIMESTAMP}.tar.gz  (snapshot of master)
+- commits_recent.txt
+- checksums.sha256
+
+How to verify:
+- Extract: tar -xzf master_${TIMESTAMP}.tar.gz
+- Verify manifest: sha256sum -c checksums.sha256
+
+EOF
+
+          # generate checksums for all files in OUT
+          cd "$OUT"
+          find . -type f -print0 | sort -z | xargs -0 sha256sum > checksums.sha256 || true
+          cd - >/dev/null || true
+
+      - name: Create simple PDF report (optional, plain text fallback)
+        run: |
+          # Try to create a simple PDF using python/reportlab if available
+          if command -v python3 >/dev/null 2>&1; then
+            python3 - <<PY
+from reportlab.lib.pagesizes import A4
+from reportlab.pdfgen import canvas
+import datetime
+out="output/report_${TIMESTAMP}.pdf"
+c=canvas.Canvas(out,pagesize=A4)
+c.setFont("Helvetica-Bold",14)
+c.drawString(30,800,"PoC Archive Report")
+c.setFont("Helvetica",9)
+c.drawString(30,785,"Repository: %s" % ("$GITHUB_REPOSITORY",))
+c.drawString(30,770,"Generated: %sZ" % datetime.datetime.utcnow().isoformat())
+y=740
+for line in open("output/summary.txt"):
+    if y < 40:
+        c.showPage(); y = 800
+    c.drawString(30,y,line.strip())
+    y -= 12
+c.save()
+print("PDF created:", out)
+PY
+          else
+            echo "Python/reportlab not available; leaving summary.txt as text report"
+          fi
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: poc_output
+          path: output/*
