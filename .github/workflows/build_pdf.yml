@@ -1,0 +1,41 @@
+name: Build PDF and Checksums
+
+on:
+  pull_request:
+    paths:
+      - 'docs/**'
+      - '.github/workflows/**'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install pandoc
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y pandoc texlive-latex-recommended texlive-fonts-recommended texlive-latex-extra
+
+      - name: Generate checksums
+        run: |
+          chmod +x verify.sh || true
+          ./verify.sh || true
+          cat checksums.sha256 || true
+
+      - name: Build combined PDF
+        run: |
+          pandoc docs/manifesto-GaIA.md docs/R43-D-Commerce-GaIA-Coin.md -o gaia_manifesto_R43.pdf --pdf-engine=xelatex
+
+      - name: Upload PDF artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: gaia_manifesto_R43
+          path: gaia_manifesto_R43.pdf
+
+      - name: Upload checksums
+        uses: actions/upload-artifact@v4
+        with:
+          name: checksums
+          path: checksums.sha256
